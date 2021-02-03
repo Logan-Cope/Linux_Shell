@@ -157,12 +157,18 @@ void changeDirectory(char **commands, int numArguments)
     if (numArguments == 1)
     {
         printf("Home\n");
-        chdir("~");
+        if (chdir(getenv("HOME")) == -1)
+        {
+            printf("there was an err\n");
+        }
     }
     else
     {
         printf("not home\n");
-        chdir(commands[1]);
+        if (chdir(commands[1]) == -1)
+        {
+            printf("there was an err\n");
+        }
     }
 }
 
@@ -175,6 +181,11 @@ int main(void)
     char *commands[513];
     int test;
     int numArguments;
+    int i;
+    for (i = 0; i < 513; i++)
+    {
+        commands[i] = NULL;
+    }
 
     do
     {
@@ -183,16 +194,23 @@ int main(void)
         fflush(stdout);
         // Get command that is max input of 2048 characters
         fgets(command, 2048, stdin);
+
         // If command was exit, set exitProgram boolean to true so that
         // we know to exit the program
-
         if (strncmp(command, "exit", 4) == 0 && strlen(command) == 5)
         {
             exitProgram = true;
         }
         else
         {
+
+            strtok(command, "\n");
             numArguments = processCommand(commands, command);
+
+            // for (i = 0; i < 10; i++)
+            // {
+            //     printf("%s\n", commands[i]);
+            // }
             // Handle blank lines or comments by checking if first char
             // is '#' or a blank line, i.e. '\n'
             if (commands[0][0] == '#' || commands[0][0] == '\n')
@@ -204,7 +222,7 @@ int main(void)
 
                 // Remove \n from the end so that the string will continue terminating
                 // on \0 instead.
-                strtok(command, "\n");
+                // strtok(command, "\n");
                 // Handle neccessary variable expansion
                 variableExpansion(commands, numArguments);
 
@@ -216,11 +234,16 @@ int main(void)
                 // else if (strncmp(commands[0], "ls", 2) == 0 && strlen(commands[0]) == 2)
                 else
                 {
+                    // char *newargv[] = {commands[0], commands[1]};
+                    // execvp("ls", newargv);
+                    // execvp(commands[0], commands);
+
                     // int i;
                     // for (i = 0; i < numArguments; i++)
                     // {
                     //     execvp(commands[i], commands);
                     // }
+
                     pid_t spawnid = -5;
                     int childStatus;
                     int childPid;
@@ -236,7 +259,7 @@ int main(void)
                     }
                     else
                     {
-                        childPid = waitpid(&childStatus, 0);
+                        childPid = waitpid(-1, &childStatus, 0);
                         // printf("parent is waiting");
                     }
                 }
