@@ -11,7 +11,10 @@
 // Struct for each argument in a command
 struct commandArg
 {
-    char *argument;
+    char *program;
+    char *arguments[512];
+    char *tokens[512];
+    int tokenCount;
 };
 
 /* This function tokenizes the user entered command and
@@ -20,37 +23,35 @@ It takes, the commands array and the command as parameters
 and returns an integer represeting the number of arguments
 in the given command
 */
-int processCommand(char **commands, char *command)
+struct commandArg *processCommand(char *command)
 {
     // dynamically create commandArg struct
-    struct commandArg *curArg = malloc(sizeof(struct commandArg));
-    int index = 0; // keeps track of which index in the array we are on
+    struct commandArg *cmd = malloc(sizeof(struct commandArg));
+
     int count = 0; // keeps track of number of elements in the array
 
     // For use with strtok_r
-    char *saveptr;
+    char *token;
+    char *rest = command;
+    memset(cmd->tokens, 0, sizeof(cmd->tokens));
+    token = strtok_r(rest, " ", &rest);
 
-    // Get the first token
-    char *token = strtok_r(command, " ", &saveptr);
+    int index = 0; // keeps track of which index in the array we are on
 
-    // Continue to tokenize until we have stored all the arguments
     while (token != NULL)
     {
-        // Store the argument in the commands array
-        curArg->argument = calloc(strlen(token) + 1, sizeof(char));
-        strcpy(curArg->argument, token);
-        commands[index] = token;
-        // Increment both of our counters
+        cmd->tokens[index] = token;
+        token = strtok_r(NULL, " ", &rest);
         index++;
-        count++;
-        // Get next argument to be stored
-        token = strtok_r(NULL, " ", &saveptr);
     }
-    // Return the number of our arguments in our array.
-    // Note: I could have just returned index, but I made a
-    // design decision to specify a count that's only has this
-    // purpose
-    return count;
+    int i;
+    // for (i = 0; i < index; i++)
+    // {
+    //     printf("%s\n", cmd->tokens[i]);
+    // }
+    cmd->tokenCount = index;
+    // printf("%d\n", cmd->tokenCount);
+    return cmd;
 }
 
 /* This function is used to replace an argument with an
@@ -156,7 +157,6 @@ void changeDirectory(char **commands, int numArguments)
 {
     if (numArguments == 1)
     {
-        printf("Home\n");
         if (chdir(getenv("HOME")) == -1)
         {
             printf("there was an err\n");
@@ -164,12 +164,44 @@ void changeDirectory(char **commands, int numArguments)
     }
     else
     {
-        printf("not home\n");
         if (chdir(commands[1]) == -1)
         {
             printf("there was an err\n");
         }
     }
+}
+
+void parseCommands(struct commandArg *cmd)
+{
+    int i;         // used to loop through tokens
+    int index = 0; // used to fill in arguments
+    for (i = 0; i < cmd->tokenCount; i++)
+    {
+        // Do not include final & in cmd->arguments because it's only
+        // indicating to run it in the background but we don't want
+        // to pass it to exec
+        if (i == cmd->tokenCount - 1 && strcmp(cmd->tokens[i], "&") == 0)
+        {
+            continue;
+        }
+        // Do not include < or >in cmd->arguments because these is
+        // for redirection but we don't want to pass them to exec
+        if (strcmp(cmd->tokens[i], "<") == 0 || strcmp(cmd->tokens[i], ">") == 0)
+        {
+            i++;
+            continue;
+        }
+        // Otherwise, copy the raw token into the arguments array
+        else
+        {
+            cmd->arguments[index] = cmd->tokens[i];
+            index++;
+        }
+    }
+    // for (i = 0; i < index; i++)
+    // {
+    //     printf("Argument: %s\n", cmd->arguments[i]);
+    // }
 }
 
 int main(void)
@@ -210,23 +242,25 @@ int main(void)
             // Remove \n from the end so that the string will continue terminating
             // on \0 instead.
             strtok(command, "\n");
-            numArguments = processCommand(commands, command);
+            struct commandArg *cmd = processCommand(command);
+            numArguments = cmd->tokenCount;
+            // Handle neccessary variable expansion
+            variableExpansion(cmd->tokens, numArguments);
+            // Remove commands with < or >
+            parseCommands(cmd);
 
             // Handle blank lines or comments by checking if first char
             // is '#' or a blank line, i.e. '\n'
-            if (commands[0][0] == '#' || commands[0][0] == '\n')
+            if (cmd->tokens[0][0] == '#' || cmd->tokens[0][0] == '\n')
             {
                 continue;
             }
             else
             {
-                // Handle neccessary variable expansion
-                variableExpansion(commands, numArguments);
-
                 // Check if we need to cd
-                if (strncmp(commands[0], "cd", 2) == 0 && strlen(commands[0]) == 2)
+                if (strncmp(cmd->tokens[0], "cd", 2) == 0 && strlen(cmd->tokens[0]) == 2)
                 {
-                    changeDirectory(commands, numArguments);
+                    changeDirectory(cmd->tokens, numArguments);
                 }
 
                 else
@@ -237,13 +271,13 @@ int main(void)
                     bool redirectedIn = false;
                     for (i = 0; i < numArguments; i++)
                     {
-                        if (strncmp(commands[i], ">", 2) == 0 && strlen(commands[i]) == 1)
+                        if (strncmp(cmd->tokens[i], ">", 2) == 0 && strlen(cmd->tokens[i]) == 1)
                         {
                             // printf("%s\n", commands[i + 1]);
                             redirectedOut = true;
                             redirectOut = i;
                         }
-                        if (strncmp(commands[i], "<", 2) == 0 && strlen(commands[i]) == 1)
+                        if (strncmp(cmd->tokens[i], "<", 2) == 0 && strlen(cmd->tokens[i]) == 1)
                         {
                             redirectedIn = true;
                             redirectIn = i;
@@ -251,42 +285,64 @@ int main(void)
                     }
                     int targetFD;
                     int sourceFD;
-                    if (redirectedOut)
-                    {
-                        targetFD = open(commands[redirectOut + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                        commands[redirectOut] = NULL;
-                    }
-                    if (redirectedIn)
-                    {
-                        sourceFD = open(commands[redirectedIn - 1], O_RDONLY);
-                    }
 
-                    pid_t spawnid = -5;
+                    pid_t spawnid;
                     int childStatus;
                     int childPid;
                     spawnid = fork();
 
+                    // fcntl(output_descriptor, F_SETFD, FD_CLOEXEC); try to
+
                     if (spawnid == -1)
                     {
-                        printf("this didn't work");
+                        printf("Falied to fork");
+                        fflush(stdout);
                     }
                     else if (spawnid == 0)
                     {
                         if (redirectedOut)
                         {
-                            dup2(targetFD, 1);
+                            targetFD = open(cmd->tokens[redirectOut + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                            if (targetFD == -1)
+                            {
+                                printf("Output file did not open");
+                                fflush(stdout);
+                            }
+                            else
+                            {
+                                dup2(targetFD, 1);
+                            }
                         }
                         if (redirectedIn)
                         {
+                            // printf("This is the file to open: %s\n", commands[redirectIn - 1]);
+                            sourceFD = open(cmd->tokens[redirectIn + 1], O_RDONLY);
+                            if (sourceFD == -1)
+                            {
+                                printf("Input file did not open: %s\n", cmd->tokens[redirectIn + 1]);
+                                fflush(stdout);
+                            }
+                            // printf("here is: %s\n", cmd->tokens[redirectIn + 1]);
                             dup2(sourceFD, 0);
+                            cmd->tokens[redirectIn] = NULL;
                         }
-                        execvp(commands[0], commands);
-                        // printf("I am a child");
+
+                        // Execute other commands
+                        execvp(cmd->arguments[0], cmd->arguments);
+
+                        // Close files
+                        if (redirectedOut)
+                        {
+                            close(targetFD);
+                        }
+                        if (redirectedIn)
+                        {
+                            close(sourceFD);
+                        }
                     }
                     else
                     {
                         childPid = waitpid(-1, &childStatus, 0);
-                        // printf("parent is waiting");
                     }
                 }
             }
