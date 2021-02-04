@@ -189,6 +189,10 @@ int main(void)
 
     do
     {
+        for (i = 0; i < 513; i++)
+        {
+            commands[i] = NULL;
+        }
         // Display colon and flush afterwards
         printf(": ");
         fflush(stdout);
@@ -203,14 +207,11 @@ int main(void)
         }
         else
         {
-
+            // Remove \n from the end so that the string will continue terminating
+            // on \0 instead.
             strtok(command, "\n");
             numArguments = processCommand(commands, command);
 
-            // for (i = 0; i < 10; i++)
-            // {
-            //     printf("%s\n", commands[i]);
-            // }
             // Handle blank lines or comments by checking if first char
             // is '#' or a blank line, i.e. '\n'
             if (commands[0][0] == '#' || commands[0][0] == '\n')
@@ -219,10 +220,6 @@ int main(void)
             }
             else
             {
-
-                // Remove \n from the end so that the string will continue terminating
-                // on \0 instead.
-                // strtok(command, "\n");
                 // Handle neccessary variable expansion
                 variableExpansion(commands, numArguments);
 
@@ -231,29 +228,58 @@ int main(void)
                 {
                     changeDirectory(commands, numArguments);
                 }
-                // else if (strncmp(commands[0], "ls", 2) == 0 && strlen(commands[0]) == 2)
+
                 else
                 {
-                    // char *newargv[] = {commands[0], commands[1]};
-                    // execvp("ls", newargv);
-                    // execvp(commands[0], commands);
-
-                    // int i;
-                    // for (i = 0; i < numArguments; i++)
-                    // {
-                    //     execvp(commands[i], commands);
-                    // }
+                    int redirectOut;
+                    bool redirectedOut = false;
+                    int redirectIn;
+                    bool redirectedIn = false;
+                    for (i = 0; i < numArguments; i++)
+                    {
+                        if (strncmp(commands[i], ">", 2) == 0 && strlen(commands[i]) == 1)
+                        {
+                            // printf("%s\n", commands[i + 1]);
+                            redirectedOut = true;
+                            redirectOut = i;
+                        }
+                        if (strncmp(commands[i], "<", 2) == 0 && strlen(commands[i]) == 1)
+                        {
+                            redirectedIn = true;
+                            redirectIn = i;
+                        }
+                    }
+                    int targetFD;
+                    int sourceFD;
+                    if (redirectedOut)
+                    {
+                        targetFD = open(commands[redirectOut + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                        commands[redirectOut] = NULL;
+                    }
+                    if (redirectedIn)
+                    {
+                        sourceFD = open(commands[redirectedIn - 1], O_RDONLY);
+                    }
 
                     pid_t spawnid = -5;
                     int childStatus;
                     int childPid;
                     spawnid = fork();
+
                     if (spawnid == -1)
                     {
                         printf("this didn't work");
                     }
                     else if (spawnid == 0)
                     {
+                        if (redirectedOut)
+                        {
+                            dup2(targetFD, 1);
+                        }
+                        if (redirectedIn)
+                        {
+                            dup2(sourceFD, 0);
+                        }
                         execvp(commands[0], commands);
                         // printf("I am a child");
                     }
