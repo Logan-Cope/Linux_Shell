@@ -17,6 +17,8 @@ struct commandArg
     int tokenCount;
 };
 
+int status = 0;
+
 /* This function tokenizes the user entered command and
 stores each command as a strcut commandArg in an array.
 It takes, the commands array and the command as parameters
@@ -198,10 +200,6 @@ void parseCommands(struct commandArg *cmd)
             index++;
         }
     }
-    // for (i = 0; i < index; i++)
-    // {
-    //     printf("Argument: %s\n", cmd->arguments[i]);
-    // }
 }
 
 int main(void)
@@ -213,6 +211,7 @@ int main(void)
     char *commands[513];
     int test;
     int numArguments;
+
     int i;
     for (i = 0; i < 513; i++)
     {
@@ -263,6 +262,12 @@ int main(void)
                     changeDirectory(cmd->tokens, numArguments);
                 }
 
+                // Check if we need to print the status
+                if (strcmp(cmd->tokens[0], "status") == 0)
+                {
+                    printf("%d\n", status);
+                }
+
                 else
                 {
                     int redirectOut;
@@ -286,17 +291,17 @@ int main(void)
                     int targetFD;
                     int sourceFD;
 
-                    pid_t spawnid;
+                    pid_t spawnid = -5;
                     int childStatus;
                     int childPid;
                     spawnid = fork();
 
-                    // fcntl(output_descriptor, F_SETFD, FD_CLOEXEC); try to
-
                     if (spawnid == -1)
                     {
-                        printf("Falied to fork");
+                        perror("Falied to fork\n");
                         fflush(stdout);
+                        exit(1);
+                        // printf("Falied to fork");
                     }
                     else if (spawnid == 0)
                     {
@@ -330,19 +335,36 @@ int main(void)
                         // Execute other commands
                         execvp(cmd->arguments[0], cmd->arguments);
 
-                        // Close files
-                        if (redirectedOut)
-                        {
-                            close(targetFD);
-                        }
-                        if (redirectedIn)
-                        {
-                            close(sourceFD);
-                        }
+                        printf("Execvp didn't work\n");
                     }
                     else
                     {
                         childPid = waitpid(-1, &childStatus, 0);
+                        // Check if process exited normally and set status
+                        if (WIFEXITED(childStatus))
+                        {
+                            printf("Process exited normally\n");
+                            status = WEXITSTATUS(childStatus);
+                            // printf("%d\n", status);
+                        }
+                        // Check if process was terminated by a signal and set status
+                        else if (WIFSIGNALED(childStatus) != 0)
+                        {
+                            printf("Process was terminated by a singal\n");
+                            status = WTERMSIG(childStatus);
+                        }
+                        // // Close files
+                        // if (redirectedOut)
+                        // {
+                        //     close(targetFD);
+                        // }
+                        // if (redirectedIn)
+                        // {
+                        //     close(sourceFD);
+                        // }
+
+                        // printf("%s\n", childStatus);
+                        // status = childStatus;
                     }
                 }
             }
