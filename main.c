@@ -26,6 +26,7 @@ struct backgroundPids
     int index;
 };
 
+// Set status and foreground mode
 int status = 0;
 bool foregroundOnly = false;
 
@@ -45,24 +46,23 @@ struct commandArg *processCommand(char *command)
     // For use with strtok_r
     char *token;
     char *rest = command;
+
+    // Set all elements of tokens array to 0
     memset(cmd->tokens, 0, sizeof(cmd->tokens));
     token = strtok_r(rest, " ", &rest);
 
     int index = 0; // keeps track of which index in the array we are on
 
+    // Tokenize command and store them in tokens array
     while (token != NULL)
     {
         cmd->tokens[index] = token;
         token = strtok_r(NULL, " ", &rest);
         index++;
     }
-    int i;
-    // for (i = 0; i < index; i++)
-    // {
-    //     printf("%s\n", cmd->tokens[i]);
-    // }
+
+    // Store number of tokens inside index of struct
     cmd->tokenCount = index;
-    // printf("%d\n", cmd->tokenCount);
     return cmd;
 }
 
@@ -161,6 +161,7 @@ command as parameters
 */
 void changeDirectory(char **commands, int numArguments)
 {
+    // If we only have 'cd' then go to home
     if (numArguments == 1)
     {
         if (chdir(getenv("HOME")) == -1)
@@ -169,6 +170,7 @@ void changeDirectory(char **commands, int numArguments)
             fflush(stdout);
         }
     }
+    // Otherwise move into specified directory
     else
     {
         if (chdir(commands[1]) == -1)
@@ -179,6 +181,12 @@ void changeDirectory(char **commands, int numArguments)
     }
 }
 
+/* This function is used to strip the raw tokens of
+their '<', '>', and '&' so that they can be passed
+into exec without those. It takes the cmd array as
+a parameter and stores the stripped commands in the
+arguments array in the struct
+*/
 void parseCommands(struct commandArg *cmd)
 {
     int i;         // used to loop through tokens
@@ -208,39 +216,148 @@ void parseCommands(struct commandArg *cmd)
     }
 }
 
+/* Signal handler that toggles whether the user is in
+foreground only mode or not
+*/
 void sigtstpHandler(int sig)
 {
+    // If we foregroundOnly is on, then toggle it off
     if (foregroundOnly)
     {
         foregroundOnly = false;
+        // Display message to screen
         char *message = "Exiting foreground-only mode\n: ";
         write(STDOUT_FILENO, message, strlen(message));
         fflush(stdout);
     }
     else
     {
+        // If we foregroundOnly is off, then toggle it on
         foregroundOnly = true;
+        // Display message to screen
         char *message = "Entering foreground-only mode (& is now ignored)\n: ";
         write(STDOUT_FILENO, message, strlen(message));
         fflush(stdout);
     }
 }
 
-void displayMessage()
-{
-    printf("some message\n");
-}
-
+/* Signal handler that determines whether child process
+has terminated
+*/
 void sigChildHandler(int sig)
 {
     pid_t childPid;
-    pid_t placeHolder;
     int childStatus;
 
-    // printf("Please work %d", waitpid(-1, &childStatus, WNOHANG));
+    // Wait for child process and terminate once finished
     childPid = waitpid(-1, &childStatus, WNOHANG);
+
+    // *** I could not figure out how to display these results without using printf
+    // I know that printf() is not reentrant but I left this code here and commented
+    // it out just so that if you want to uncomment it, and see that this pid and
+    // exit do print out if tested manually***
+    // Suggested Test:
+    // sleep 5 &
+    // sleep 1 &
+    // If these are run back to back quickly, then you can see that the second
+    // command enterd terminates before the first command entered as expected
+
+    // Uncomment 2 lines below to test manually
     // printf("Background pid %d is done: exit value %d\n : ", childPid, WEXITSTATUS(childStatus));
     // fflush(stdout);
+}
+
+void runInBackground(struct commandArg *cmd, int numArguments)
+{
+    int redirectOut;
+    bool redirectedOut = false;
+    int redirectIn;
+    bool redirectedIn = false;
+    int i;
+    for (i = 0; i < numArguments; i++)
+    {
+        if (strncmp(cmd->tokens[i], ">", 2) == 0 && strlen(cmd->tokens[i]) == 1)
+        {
+            redirectedOut = true;
+            redirectOut = i;
+        }
+        if (strncmp(cmd->tokens[i], "<", 2) == 0 && strlen(cmd->tokens[i]) == 1)
+        {
+            redirectedIn = true;
+            redirectIn = i;
+        }
+    }
+    int targetFD;
+    int sourceFD;
+
+    pid_t spawnid = -5;
+    int childStatus;
+    int childPid;
+    spawnid = fork();
+
+    if (spawnid == -1)
+    {
+        perror("Falied to fork\n");
+        fflush(stdout);
+        exit(1);
+    }
+    else if (spawnid == 0)
+    {
+        printf("Background PID is: %d\n", getpid());
+        fflush(stdout);
+
+        if (redirectedOut)
+        {
+            targetFD = open(cmd->tokens[redirectOut + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (targetFD == -1)
+            {
+                printf("Output file did not open");
+                fflush(stdout);
+            }
+            else
+            {
+                dup2(targetFD, 1);
+            }
+        }
+        else
+        {
+            targetFD = open("/dev/null", O_WRONLY);
+            dup2(targetFD, 1);
+        }
+
+        if (redirectedIn)
+        {
+            sourceFD = open(cmd->tokens[redirectIn + 1], O_RDONLY);
+            if (sourceFD == -1)
+            {
+                printf("Input file did not open: %s\n", cmd->tokens[redirectIn + 1]);
+                fflush(stdout);
+            }
+            dup2(sourceFD, 0);
+            cmd->tokens[redirectIn] = NULL;
+        }
+        else
+        {
+            sourceFD = open("/dev/null", O_RDONLY);
+            dup2(sourceFD, 0);
+        }
+
+        // Execute other commands
+        execvp(cmd->arguments[0], cmd->arguments);
+        perror("");
+        status = 1;
+        fflush(stdout);
+        exit(1);
+        // break;
+    }
+    else
+    {
+        signal(SIGCHLD, sigChildHandler);
+        // childPid = waitpid(-1, &childStatus, WNOHANG);
+        // bgPids->pids[bgPids->index] = spawnid;
+        // printf("Did this work: %d\n", bgPids->pids[bgPids->index]);
+        // bgPids->index++;
+    }
 }
 
 int main(void)
@@ -257,7 +374,7 @@ int main(void)
     bool exitProgram = false;
     // String large enough to support 2048 character commands
     char command[2049];
-    int numArguments;
+    int numArguments; // will hold the number of space separated commands that user enters
 
     struct backgroundPids *bgPids = malloc(sizeof(struct backgroundPids));
     int i;
@@ -276,7 +393,8 @@ int main(void)
         // we know to exit the program
         if (strncmp(command, "exit", 4) == 0 && strlen(command) == 5)
         {
-            // killpg(0, SIGKILL);
+            // Kill all processes (including background) and exit
+            killpg(0, SIGKILL);
             exitProgram = true;
         }
         else
@@ -316,113 +434,105 @@ int main(void)
                 // in foreground only mode before running process in the background
                 else if (strcmp(cmd->tokens[cmd->tokenCount - 1], "&") == 0 && (!foregroundOnly))
                 {
-                    int redirectOut;
-                    bool redirectedOut = false;
-                    int redirectIn;
-                    bool redirectedIn = false;
-                    for (i = 0; i < numArguments; i++)
-                    {
-                        if (strncmp(cmd->tokens[i], ">", 2) == 0 && strlen(cmd->tokens[i]) == 1)
-                        {
-                            redirectedOut = true;
-                            redirectOut = i;
-                        }
-                        if (strncmp(cmd->tokens[i], "<", 2) == 0 && strlen(cmd->tokens[i]) == 1)
-                        {
-                            redirectedIn = true;
-                            redirectIn = i;
-                        }
-                    }
-                    int targetFD;
-                    int sourceFD;
+                    runInBackground(cmd, numArguments);
+                    // int redirectOut;
+                    // bool redirectedOut = false;
+                    // int redirectIn;
+                    // bool redirectedIn = false;
+                    // for (i = 0; i < numArguments; i++)
+                    // {
+                    //     if (strncmp(cmd->tokens[i], ">", 2) == 0 && strlen(cmd->tokens[i]) == 1)
+                    //     {
+                    //         redirectedOut = true;
+                    //         redirectOut = i;
+                    //     }
+                    //     if (strncmp(cmd->tokens[i], "<", 2) == 0 && strlen(cmd->tokens[i]) == 1)
+                    //     {
+                    //         redirectedIn = true;
+                    //         redirectIn = i;
+                    //     }
+                    // }
+                    // int targetFD;
+                    // int sourceFD;
 
-                    pid_t spawnid = -5;
-                    int childStatus;
-                    int childPid;
-                    spawnid = fork();
+                    // pid_t spawnid = -5;
+                    // int childStatus;
+                    // int childPid;
+                    // spawnid = fork();
 
-                    if (spawnid == -1)
-                    {
-                        perror("Falied to fork\n");
-                        fflush(stdout);
-                        exit(1);
-                    }
-                    else if (spawnid == 0)
-                    {
-                        printf("Background PID is: %d\n", getpid());
-                        fflush(stdout);
-                        // for (i = 0; i < 201; i++)
-                        // {
-                        //     if (bgPids->pids[i] == 0)
-                        //     {
-                        //         bgPids->pids[i] = getpid();
-                        //         printf("This child's pid is %d and index is %d\n", bgPids->pids[i], i);
-                        //         fflush(stdout);
-                        //         break;
-                        //     }
-                        // }
+                    // if (spawnid == -1)
+                    // {
+                    //     perror("Falied to fork\n");
+                    //     fflush(stdout);
+                    //     exit(1);
+                    // }
+                    // else if (spawnid == 0)
+                    // {
+                    //     printf("Background PID is: %d\n", getpid());
+                    //     fflush(stdout);
+                    //     // for (i = 0; i < 201; i++)
+                    //     // {
+                    //     //     if (bgPids->pids[i] == 0)
+                    //     //     {
+                    //     //         bgPids->pids[i] = getpid();
+                    //     //         printf("This child's pid is %d and index is %d\n", bgPids->pids[i], i);
+                    //     //         fflush(stdout);
+                    //     //         break;
+                    //     //     }
+                    //     // }
 
-                        if (redirectedOut)
-                        {
-                            targetFD = open(cmd->tokens[redirectOut + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                            if (targetFD == -1)
-                            {
-                                printf("Output file did not open");
-                                fflush(stdout);
-                            }
-                            else
-                            {
-                                dup2(targetFD, 1);
-                            }
-                        }
-                        else
-                        {
-                            targetFD = open("/dev/null", O_WRONLY);
-                            dup2(targetFD, 1);
-                        }
+                    //     if (redirectedOut)
+                    //     {
+                    //         targetFD = open(cmd->tokens[redirectOut + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    //         if (targetFD == -1)
+                    //         {
+                    //             printf("Output file did not open");
+                    //             fflush(stdout);
+                    //         }
+                    //         else
+                    //         {
+                    //             dup2(targetFD, 1);
+                    //         }
+                    //     }
+                    //     else
+                    //     {
+                    //         targetFD = open("/dev/null", O_WRONLY);
+                    //         dup2(targetFD, 1);
+                    //     }
 
-                        if (redirectedIn)
-                        {
-                            sourceFD = open(cmd->tokens[redirectIn + 1], O_RDONLY);
-                            if (sourceFD == -1)
-                            {
-                                printf("Input file did not open: %s\n", cmd->tokens[redirectIn + 1]);
-                                fflush(stdout);
-                            }
-                            dup2(sourceFD, 0);
-                            cmd->tokens[redirectIn] = NULL;
-                        }
-                        else
-                        {
-                            sourceFD = open("/dev/null", O_RDONLY);
-                            dup2(sourceFD, 0);
-                        }
+                    //     if (redirectedIn)
+                    //     {
+                    //         sourceFD = open(cmd->tokens[redirectIn + 1], O_RDONLY);
+                    //         if (sourceFD == -1)
+                    //         {
+                    //             printf("Input file did not open: %s\n", cmd->tokens[redirectIn + 1]);
+                    //             fflush(stdout);
+                    //         }
+                    //         dup2(sourceFD, 0);
+                    //         cmd->tokens[redirectIn] = NULL;
+                    //     }
+                    //     else
+                    //     {
+                    //         sourceFD = open("/dev/null", O_RDONLY);
+                    //         dup2(sourceFD, 0);
+                    //     }
 
-                        // Execute other commands
-                        execvp(cmd->arguments[0], cmd->arguments);
-                        perror("");
-                        status = 1;
-                        fflush(stdout);
-                        exit(1);
-                        break;
-                    }
-                    else
-                    {
-                        signal(SIGCHLD, sigChildHandler);
-                        // childPid = waitpid(-1, &childStatus, WNOHANG);
-                        // bgPids->pids[bgPids->index] = spawnid;
-                        // printf("Did this work: %d\n", bgPids->pids[bgPids->index]);
-                        // bgPids->index++;
-
-                        // for (i = 0; i < 201; i++)
-                        // {
-                        //     if (bgPids->pids[i] == 0)
-                        //     {
-                        //         bgPids->pids[i] = childPid;
-                        //         break;
-                        //     }
-                        // }
-                    }
+                    //     // Execute other commands
+                    //     execvp(cmd->arguments[0], cmd->arguments);
+                    //     perror("");
+                    //     status = 1;
+                    //     fflush(stdout);
+                    //     exit(1);
+                    //     break;
+                    // }
+                    // else
+                    // {
+                    //     signal(SIGCHLD, sigChildHandler);
+                    //     // childPid = waitpid(-1, &childStatus, WNOHANG);
+                    //     // bgPids->pids[bgPids->index] = spawnid;
+                    //     // printf("Did this work: %d\n", bgPids->pids[bgPids->index]);
+                    //     // bgPids->index++;
+                    // }
                 }
 
                 else
@@ -540,20 +650,28 @@ int main(void)
         //     fflush(stdout);
         // }
         // int childPid;
-        // int childStatus;
+        int childStatus;
         // // printf("Stored pid: %d\n", bgPids->pids[1]);
         // for (i = 0; i < bgPids->index; i++)
         // {
         //     // printf("here: %d\n", bgPids->pids[i]);
-        //     while (waitpid(bgPids->pids[i], &childStatus, WNOHANG) != 0)
+        //     if (bgPids->pids[i] != 0)
         //     {
-        //         printf("Background pid %d is done: exit value %s\n", bgPids->pids[i], WEXITSTATUS(childStatus));
-        //         fflush(stdout);
-        //         kill(bgPids->pids[i], SIGTERM);
-        //         bgPids->pids[i] = 0;
+        //         while (waitpid(bgPids->pids[i], &childStatus, WNOHANG) != 0)
+        //         {
+        //             printf("Background pid %d is done: exit value %s\n", bgPids->pids[i], WEXITSTATUS(childStatus));
+        //             fflush(stdout);
+        //             kill(bgPids->pids[i], SIGKILL);
+        //             bgPids->pids[i] = 0;
+        //         }
         //     }
         // }
-
+        // if (alert)
+        // {
+        //     printf("Background pid %d is done: exit value %d\n : ", pidToDisplay, exitStatus);
+        //     fflush(stdout);
+        //     alert = false;
+        // }
     } while (!exitProgram);
 
     return EXIT_SUCCESS;
